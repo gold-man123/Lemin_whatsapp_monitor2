@@ -1,0 +1,36 @@
+{
+  "name": "whatsapp-monitor",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Advanced WhatsApp monitoring system with real-time dashboard",
+  "main": "index.js",
+  "scripts": {
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "npm run build:server && node dist/index.js",
+    "dev": "npm run build:server && node dist/index.js"
+  },
+  "dependencies": {
+    "@adiwajshing/baileys": "^4.0.0",
+    "express": "^4.18.2",
+    "ejs": "^3.1.9",
+    "sqlite3": "^5.1.6",
+    "sqlite": "^4.1.2",
+    "socket.io": "^4.7.2",
+    "node-fetch": "^3.7.0",
+    "@hapi/boom": "^10.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "monitoring",
+    "baileys",
+    "dashboard",
+    "real-time"
+  ]
+}
