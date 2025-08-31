@@ -16,7 +16,7 @@
     "sqlite3": "^5.1.6",
     "sqlite": "^4.1.2",
     "socket.io": "^4.7.2",
-    "node-fetch": "^3.7.0",
+    "node-fetch": "^3.3.2",
     "@hapi/boom": "^10.0.1"
   },
   "devDependencies": {
