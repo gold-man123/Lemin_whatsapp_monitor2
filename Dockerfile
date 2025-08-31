@@ -1,7 +1,8 @@
 FROM node:18-alpine
 
 # Install required system dependencies
-RUN apk add --no-cache python3 make g++ sqlite git
+RUN apk add --no-cache python3 make g++ sqlite git && \
+    npm install -g npm@latest
 
 WORKDIR /app
 
