@@ -46,10 +46,13 @@
                 </div>
                 <div class="flex items-center space-x-4">
                     <div class="text-sm text-gray-500">
+                        <span class="font-medium text-red-600" id="active-alerts"><%= stats.active_alerts || 0 %></span> alerts
+                    </div>
+                    <div class="text-sm text-gray-500">
                         <span class="font-medium" id="total-messages"><%= stats.total_messages %></span> messages
                     </div>
                     <div class="text-sm text-gray-500">
-                        <span class="font-medium" id="active-channels"><%= stats.active_channels %></span> channels
+                        <span class="font-medium" id="active-channels"><%= stats.total_channels %></span> channels
                     </div>
                 </div>
             </div>
@@ -57,6 +60,106 @@
     </header>
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Security Alerts -->
+        <% if (alerts && alerts.length > 0) { %>
+        <div class="bg-red-50 border border-red-200 rounded-lg p-6 mb-8">
+            <h2 class="text-lg font-semibold text-red-900 mb-4 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path>
+                </svg>
+                Active Security Alerts
+            </h2>
+            <div class="space-y-3">
+                <% alerts.forEach(alert => { %>
+                    <div class="bg-white border border-red-200 rounded-lg p-4">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <span class="px-2 py-1 text-xs font-medium rounded-full 
+                                    <%= alert.severity === 'critical' ? 'bg-red-100 text-red-800' : 
+                                        alert.severity === 'high' ? 'bg-orange-100 text-orange-800' : 
+                                        'bg-yellow-100 text-yellow-800' %>">
+                                    <%= alert.severity.toUpperCase() %>
+                                </span>
+                                <span class="text-sm font-medium text-gray-900"><%= alert.type.replace(/_/g, ' ').toUpperCase() %></span>
+                            </div>
+                            <span class="text-xs text-gray-500"><%= new Date(alert.timestamp).toLocaleString() %></span>
+                        </div>
+                        <p class="text-sm text-gray-700 mt-2"><%= alert.description %></p>
+                        <p class="text-xs text-gray-500 mt-1">Channel: <%= alert.channel_jid %></p>
+                    </div>
+                <% }) %>
+            </div>
+        </div>
+        <% } %>
+
+        <!-- Analytics Dashboard -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                            <svg class="w-5 h-5 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z"></path>
+                                <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Total Messages</p>
+                        <p class="text-2xl font-semibold text-gray-900" id="stat-total-messages"><%= stats.total_messages %></p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                            <svg class="w-5 h-5 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Active Channels</p>
+                        <p class="text-2xl font-semibold text-gray-900" id="stat-active-channels"><%= stats.total_channels %></p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-yellow-100 rounded-lg flex items-center justify-center">
+                            <svg class="w-5 h-5 text-yellow-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M3 6a3 3 0 013-3h10a1 1 0 01.8 1.6L14.25 8l2.55 3.4A1 1 0 0116 13H6a1 1 0 00-1 1v3a1 1 0 11-2 0V6z" clip-rule="evenodd"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Recent (24h)</p>
+                        <p class="text-2xl font-semibold text-gray-900" id="stat-recent-messages"><%= stats.recent_messages %></p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center">
+                            <svg class="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Active Alerts</p>
+                        <p class="text-2xl font-semibold text-gray-900" id="stat-active-alerts"><%= stats.active_alerts || 0 %></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Add Channel Form -->
         <div class="bg-white rounded-lg shadow-sm p-6 mb-8">
             <h2 class="text-lg font-semibold text-gray-900 mb-4">Add Monitoring Channel</h2>
@@ -94,6 +197,7 @@
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Channel</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">JID</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Messages</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Risk Score</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Activity</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
@@ -109,6 +213,14 @@
                                     </td>
                                     <td class="px-4 py-3 text-sm text-gray-500 font-mono"><%= channel.jid %></td>
                                     <td class="px-4 py-3 text-sm text-gray-900"><%= channel.message_count || 0 %></td>
+                                    <td class="px-4 py-3 text-sm">
+                                        <span class="px-2 py-1 text-xs font-medium rounded-full 
+                                            <%= (channel.risk_score || 0) > 0.7 ? 'bg-red-100 text-red-800' : 
+                                                (channel.risk_score || 0) > 0.3 ? 'bg-yellow-100 text-yellow-800' : 
+                                                'bg-green-100 text-green-800' %>">
+                                            <%= ((channel.risk_score || 0) * 100).toFixed(1) %>%
+                                        </span>
+                                    </td>
                                     <td class="px-4 py-3 text-sm text-gray-500">
                                         <%= channel.last_message_at ? new Date(channel.last_message_at).toLocaleString() : 'Never' %>
                                     </td>
@@ -181,12 +293,13 @@
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Channel</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Content</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Media</th>
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200" id="messages-body">
                         <% if (messages.length === 0) { %>
                             <tr>
-                                <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+                                <td colspan="6" class="px-6 py-8 text-center text-gray-500">
                                     No messages found. Start monitoring channels to see messages here.
                                 </td>
                             </tr>
@@ -204,14 +317,21 @@
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <span class="px-2 py-1 text-xs font-medium rounded-full 
-                                            <%= message.type === 'group' ? 'bg-blue-100 text-blue-800' : 
-                                                message.type === 'outgoing' ? 'bg-green-100 text-green-800' : 
+                                            <%= message.message_type === 'group' ? 'bg-blue-100 text-blue-800' : 
+                                                message.message_type === 'outgoing' ? 'bg-green-100 text-green-800' : 
                                                 'bg-gray-100 text-gray-800' %>">
-                                            <%= message.type %>
+                                            <%= message.message_type %>
                                         </span>
                                     </td>
                                     <td class="px-6 py-4 text-sm text-gray-900 max-w-md">
                                         <div class="truncate"><%= message.content %></div>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-500">
+                                        <% if (message.type !== 'text') { %>
+                                            <span class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">
+                                                <%= message.type %>
+                                            </span>
+                                        <% } %>
                                     </td>
                                 </tr>
                             <% }) %>
@@ -247,7 +367,7 @@
         // Handle new messages
         socket.on('new_message', (message) => {
             const tbody = document.getElementById('messages-body');
-            const noMessagesRow = tbody.querySelector('td[colspan="5"]');
+            const noMessagesRow = tbody.querySelector('td[colspan="6"]');
             
             // Remove "no messages" row if it exists
             if (noMessagesRow) {
@@ -267,12 +387,15 @@
                     ${escapeHtml(message.target_channel)}
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">
-                    <span class="px-2 py-1 text-xs font-medium rounded-full ${getTypeClass(message.type)}">
-                        ${message.type}
+                    <span class="px-2 py-1 text-xs font-medium rounded-full ${getTypeClass(message.message_type)}">
+                        ${message.message_type}
                     </span>
                 </td>
                 <td class="px-6 py-4 text-sm text-gray-900 max-w-md">
                     <div class="truncate">${escapeHtml(message.content)}</div>
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    ${message.type !== 'text' ? `<span class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">${message.type}</span>` : ''}
                 </td>
             `;
             
@@ -289,6 +412,18 @@
             const rows = tbody.querySelectorAll('tr');
             if (rows.length > 200) {
                 rows[rows.length - 1].remove();
+            }
+        });
+
+        // Handle security alerts
+        socket.on('security_alert', (alert) => {
+            showToast(`Security Alert: ${alert.description}`, 'warning');
+            
+            // Update alert count
+            const alertCount = document.getElementById('stat-active-alerts');
+            if (alertCount) {
+                const current = parseInt(alertCount.textContent) || 0;
+                alertCount.textContent = (current + 1).toString();
             }
         });
 
@@ -310,11 +445,14 @@
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
-            toast.className = `bg-white border border-gray-200 rounded-lg shadow-lg p-4 max-w-sm fade-in`;
+            const bgColor = type === 'success' ? 'bg-green-50 border-green-200' : 
+                           type === 'warning' ? 'bg-yellow-50 border-yellow-200' : 
+                           'bg-blue-50 border-blue-200';
+            toast.className = `${bgColor} rounded-lg shadow-lg p-4 max-w-sm fade-in`;
             toast.innerHTML = `
                 <div class="flex items-center">
                     <div class="flex-shrink-0">
-                        <div class="w-2 h-2 rounded-full ${type === 'success' ? 'bg-green-400' : 'bg-blue-400'}"></div>
+                        <div class="w-2 h-2 rounded-full ${type === 'success' ? 'bg-green-400' : type === 'warning' ? 'bg-yellow-400' : 'bg-blue-400'}"></div>
                     </div>
                     <div class="ml-3">
                         <p class="text-sm text-gray-900">${message}</p>
@@ -329,7 +467,9 @@
             
             // Auto remove after 5 seconds
             setTimeout(() => {
-                toast.remove();
+                if (toast.parentNode) {
+                    toast.remove();
+                }
             }, 5000);
         }
 
@@ -337,6 +477,14 @@
         setInterval(() => {
             socket.emit('request_stats');
         }, 30000);
+
+        // Real-time stats updates
+        socket.on('stats_update', (stats) => {
+            document.getElementById('stat-total-messages').textContent = stats.total_messages;
+            document.getElementById('stat-active-channels').textContent = stats.total_channels;
+            document.getElementById('stat-recent-messages').textContent = stats.recent_messages;
+            document.getElementById('stat-active-alerts').textContent = stats.active_alerts || 0;
+        });
     </script>
 </body>
 </html>
