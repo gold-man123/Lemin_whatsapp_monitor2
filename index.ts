@@ -264,51 +264,28 @@ async function startWhatsAppSocket() {
 // ---------- Dashboard Routes ----------
 app.get('/', async (req, res) => {
   try {
-    const db = await dbPromise;
-    const channels = await db.all(`
-      SELECT *, 
-        (SELECT COUNT(*) FROM messages WHERE target_channel = channels.jid) as message_count
-      FROM channels 
-      ORDER BY created_at DESC
-    `);
+    const channels = await dbManager.getChannels();
     
     const channelFilter = req.query.channel || '';
     const searchQuery = req.query.search || '';
     
-    let messages;
-    let queryParams = [];
-    let whereClause = 'WHERE 1=1';
-    
-    if (channelFilter) {
-      whereClause += ' AND target_channel = ?';
-      queryParams.push(channelFilter);
-    }
-    
-    if (searchQuery) {
-      whereClause += ' AND content LIKE ?';
-      queryParams.push(`%${searchQuery}%`);
-    }
-    
-    messages = await db.all(
-      `SELECT * FROM messages ${whereClause} ORDER BY timestamp DESC LIMIT 200`,
-      queryParams
-    );
+    const messages = await dbManager.getMessages({
+      channel: channelFilter as string,
+      search: searchQuery as string,
+      limit: 200
+    });
 
-    const stats = await db.get(`
-      SELECT 
-        COUNT(*) as total_messages,
-        COUNT(DISTINCT target_channel) as active_channels,
-        MAX(timestamp) as last_message_time
-      FROM messages
-    `);
+    const stats = await dbManager.getSystemStats();
+    const alerts = await dbManager.getAlerts({ resolved: false, limit: 10 });
 
     res.render('dashboard', { 
       channels, 
       messages, 
+      alerts,
       channelFilter, 
       searchQuery,
-      stats: stats || { total_messages: 0, active_channels: 0, last_message_time: null },
-      connectionStatus
+      stats,
+      connectionStatus: whatsappManager.getConnectionStatus()
     });
   } catch (error) {
     console.error('Dashboard error:', error);
@@ -325,11 +302,13 @@ app.post('/channels', async (req, res) => {
   }
   
   try {
-    const db = await dbPromise;
-    await db.run(
-      'INSERT OR IGNORE INTO channels(jid, label, created_at) VALUES(?, ?, ?)',
-      [jid.trim(), label?.trim() || jid.trim(), Date.now()]
-    );
+    const channels = await dbManager.getChannels();
+    const existingChannel = channels.find(c => c.jid === jid.trim());
+    
+    if (!existingChannel) {
+      // Add to database (this would need a new method in DatabaseManager)
+      await whatsappManager.addMonitoredChannel(jid.trim());
+    }
     
     console.log(`✅ Added monitoring channel: ${jid}`);
     res.redirect('/?success=channel_added');
@@ -344,8 +323,12 @@ app.post('/channels/delete', async (req, res) => {
   const { id } = req.body;
   
   try {
-    const db = await dbPromise;
-    await db.run('DELETE FROM channels WHERE id = ?', [id]);
+    const channels = await dbManager.getChannels();
+    const channel = channels.find(c => c.id === parseInt(id));
+    
+    if (channel) {
+      await whatsappManager.removeMonitoredChannel(channel.jid);
+    }
     
     console.log(`🗑️ Removed monitoring channel: ${id}`);
     res.redirect('/?success=channel_removed');
@@ -355,40 +338,19 @@ app.post('/channels/delete', async (req, res) => {
   }
 });
 
-// Toggle channel active status
-app.post('/channels/toggle', async (req, res) => {
-  const { id } = req.body;
-  
-  try {
-    const db = await dbPromise;
-    await db.run('UPDATE channels SET is_active = NOT is_active WHERE id = ?', [id]);
-    res.redirect('/');
-  } catch (error) {
-    console.error('Error toggling channel:', error);
-    res.redirect('/?error=database_error');
-  }
-});
-
 // ---------- API Routes ----------
 app.get('/api/messages', async (req, res) => {
   try {
-    const db = await dbPromise;
     const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
     const offset = parseInt(req.query.offset || '0', 10);
     const channel = req.query.channel;
     
-    let query = 'SELECT * FROM messages';
-    let params = [];
+    const messages = await dbManager.getMessages({
+      channel: channel as string,
+      limit,
+      offset
+    });
     
-    if (channel) {
-      query += ' WHERE target_channel = ?';
-      params.push(channel);
-    }
-    
-    query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?';
-    params.push(limit, offset);
-    
-    const messages = await db.all(query, params);
     res.json(messages);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -397,8 +359,7 @@ app.get('/api/messages', async (req, res) => {
 
 app.get('/api/channels', async (req, res) => {
   try {
-    const db = await dbPromise;
-    const channels = await db.all('SELECT * FROM channels ORDER BY created_at DESC');
+    const channels = await dbManager.getChannels();
     res.json(channels);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -407,30 +368,22 @@ app.get('/api/channels', async (req, res) => {
 
 app.get('/api/stats', async (req, res) => {
   try {
-    const db = await dbPromise;
-    
-    const totalMessages = await db.get('SELECT COUNT(*) as count FROM messages');
-    const totalChannels = await db.get('SELECT COUNT(*) as count FROM channels');
-    const recentMessages = await db.get(`
-      SELECT COUNT(*) as count FROM messages 
-      WHERE timestamp > ?
-    `, [Date.now() - 24 * 60 * 60 * 1000]); // Last 24 hours
-    
-    const topChannels = await db.all(`
-      SELECT target_channel, COUNT(*) as message_count, MAX(timestamp) as last_message
-      FROM messages 
-      GROUP BY target_channel 
-      ORDER BY message_count DESC 
-      LIMIT 5
-    `);
+    const stats = await dbManager.getSystemStats();
+    stats.connection_status = whatsappManager.getConnectionStatus();
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-    res.json({
-      total_messages: totalMessages.count,
-      total_channels: totalChannels.count,
-      recent_messages: recentMessages.count,
-      top_channels: topChannels,
-      connection_status: connectionStatus
-    });
+app.get('/api/alerts', async (req, res) => {
+  try {
+    const resolved = req.query.resolved === 'true';
+    const severity = req.query.severity as string;
+    const limit = parseInt(req.query.limit || '50', 10);
+    
+    const alerts = await dbManager.getAlerts({ resolved, severity, limit });
+    res.json(alerts);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -438,26 +391,21 @@ app.get('/api/stats', async (req, res) => {
 
 // Test webhook endpoint
 app.post('/api/webhook/test', async (req, res) => {
-  const payload = { 
-    event: 'webhook_test',
-    timestamp: Date.now(),
-    message: 'Test webhook from WhatsApp Monitor'
-  };
-  
-  await sendWebhook(payload);
-  res.json({ sent: !!WEBHOOK_URL, webhook_url: WEBHOOK_URL ? '[CONFIGURED]' : '[NOT SET]' });
+  const result = await webhookManager.testWebhook();
+  res.json(result);
 });
 
-// Backfill endpoint - manually trigger message sync
-app.post('/api/backfill', async (req, res) => {
-  if (!sock) {
-    return res.status(400).json({ error: 'WhatsApp not connected' });
+// Send message endpoint
+app.post('/api/send', async (req, res) => {
+  const { jid, message } = req.body;
+  
+  if (!jid || !message) {
+    return res.status(400).json({ error: 'JID and message are required' });
   }
   
   try {
-    // This will trigger messages.upsert with type 'append' for historical messages
-    console.log('🔄 Starting backfill process...');
-    res.json({ status: 'backfill_started', message: 'Check console for progress' });
+    const success = await whatsappManager.sendMessage(jid, message);
+    res.json({ success, message: success ? 'Message sent' : 'Failed to send message' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -468,7 +416,7 @@ io.on('connection', (socket) => {
   console.log('🔌 Dashboard client connected');
   
   // Send current connection status
-  socket.emit('connection_status', { status: connectionStatus });
+  socket.emit('connection_status', { status: whatsappManager.getConnectionStatus() });
   
   socket.on('disconnect', () => {
     console.log('🔌 Dashboard client disconnected');
@@ -476,15 +424,7 @@ io.on('connection', (socket) => {
   
   socket.on('request_stats', async () => {
     try {
-      const db = await dbPromise;
-      const stats = await db.get(`
-        SELECT 
-          COUNT(*) as total_messages,
-          COUNT(DISTINCT target_channel) as active_channels,
-          MAX(timestamp) as last_message_time
-        FROM messages
-      `);
-      
+      const stats = await dbManager.getSystemStats();
       socket.emit('stats_update', stats);
     } catch (error) {
       console.error('Stats error:', error);
@@ -492,11 +432,22 @@ io.on('connection', (socket) => {
   });
 });
 
+// Set up connection status emitter
+connectionStatusEmitter = (status: string) => {
+  io.emit('connection_status', { status });
+};
+
 // ---------- Initialize and Start ----------
 async function initialize() {
   try {
-    await initDb();
-    await startWhatsAppSocket();
+    await dbManager.initialize();
+    await whatsappManager.initialize();
+    
+    // Set up periodic cleanup
+    setInterval(async () => {
+      await dbManager.cleanup();
+      messageAnalyzer.cleanupRateLimitData();
+    }, 60 * 60 * 1000); // Every hour
     
     server.listen(PORT, () => {
       console.log(`🚀 WhatsApp Monitor Dashboard: http://localhost:${PORT}`);
@@ -515,12 +466,8 @@ async function initialize() {
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down gracefully...');
   
-  if (sock) {
-    await sock.logout();
-  }
-  
-  const db = await dbPromise;
-  await db.close();
+  await whatsappManager.cleanup();
+  await dbManager.close();
   
   process.exit(0);
 });
