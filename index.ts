@@ -3,20 +3,37 @@ import { Boom } from '@hapi/boom';
 import express from 'express';
 import http from 'http';
 import { Server as IOServer } from 'socket.io';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
-import fetch from 'node-fetch';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import compression from 'compression';
+import cors from 'cors';
+import { body, validationResult } from 'express-validator';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+// Import our services
+import { DatabaseManager } from './src/services/DatabaseManager.js';
+import { MessageAnalyzer } from './src/services/MessageAnalyzer.js';
+import { WebhookManager } from './src/services/WebhookManager.js';
+import { WhatsAppManager } from './src/services/WhatsAppManager.js';
+import { PerformanceMonitor } from './src/services/PerformanceMonitor.js';
+import { SecurityManager } from './src/services/SecurityManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ---------- Configuration ----------
-const AUTH_DIR = './auth_info';
-const DB_FILE = './whatsapp_data.db';
-const PORT = process.env.PORT || 3000;
-const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
+const CONFIG = {
+  AUTH_DIR: './auth_info',
+  DB_FILE: './whatsapp_data.db',
+  PORT: parseInt(process.env.PORT || '3000'),
+  WEBHOOK_URL: process.env.WEBHOOK_URL || '',
+  LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+  MAX_MESSAGE_BATCH_SIZE: 100,
+  CLEANUP_INTERVAL: 60 * 60 * 1000, // 1 hour
+  RATE_LIMIT_WINDOW: 15 * 60 * 1000, // 15 minutes
+  RATE_LIMIT_MAX: 100 // requests per window
+};
 
 // ---------- Express + Socket.io Setup ----------
 const app = express();
@@ -25,288 +42,173 @@ const io = new IOServer(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  transports: ['websocket', 'polling']
 });
 
+// ---------- Security Middleware ----------
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdn.tailwindcss.com"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com", "https://cdn.jsdelivr.net"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "ws:", "wss:"]
+    }
+  }
+}));
+
+app.use(cors());
+app.use(compression());
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: CONFIG.RATE_LIMIT_WINDOW,
+  max: CONFIG.RATE_LIMIT_MAX,
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use('/api/', limiter);
+
+// Body parsing with size limits
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Static files and view engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ---------- Database Setup ----------
-const dbPromise = open({
-  filename: DB_FILE,
-  driver: sqlite3.Database
-});
+// ---------- Service Initialization ----------
+const dbManager = new DatabaseManager(CONFIG.DB_FILE);
+const messageAnalyzer = new MessageAnalyzer();
+const webhookManager = new WebhookManager(CONFIG.WEBHOOK_URL);
+const performanceMonitor = new PerformanceMonitor();
+const securityManager = new SecurityManager();
 
-async function initDb() {
-  const db = await dbPromise;
-  
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS channels (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      jid TEXT UNIQUE NOT NULL,
-      label TEXT NOT NULL,
-      is_active INTEGER DEFAULT 1,
-      created_at INTEGER NOT NULL,
-      last_message_at INTEGER
-    );
-  `);
-  
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      sender TEXT NOT NULL,
-      target_channel TEXT NOT NULL,
-      type TEXT NOT NULL,
-      content TEXT,
-      timestamp INTEGER NOT NULL,
-      is_from_me INTEGER DEFAULT 0,
-      message_type TEXT DEFAULT 'text'
-    );
-  `);
+let whatsappManager: WhatsAppManager;
 
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_messages_target ON messages(target_channel);
-    CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
-  `);
-  
-  console.log('✅ Database initialized');
-}
+// Global connection status emitter
+let connectionStatusEmitter: (status: string) => void;
 
-// Global variables
-let sock;
-let connectionStatus = 'disconnected';
+// ---------- Validation Middleware ----------
+const validateChannelInput = [
+  body('jid')
+    .trim()
+    .isLength({ min: 10, max: 100 })
+    .matches(/^[\w\d@.-]+$/)
+    .withMessage('Invalid JID format'),
+  body('label')
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .escape()
+];
 
-// ---------- Utility Functions ----------
-function extractMessageContent(message) {
-  if (!message.message) return '';
-  
-  return (
-    message.message.conversation ||
-    message.message.extendedTextMessage?.text ||
-    message.message.imageMessage?.caption ||
-    message.message.videoMessage?.caption ||
-    message.message.documentMessage?.fileName ||
-    message.message.audioMessage?.caption ||
-    '[Media message]'
-  ).toString();
-}
+const validateMessageInput = [
+  body('jid')
+    .trim()
+    .isLength({ min: 10, max: 100 })
+    .matches(/^[\w\d@.-]+$/),
+  body('message')
+    .trim()
+    .isLength({ min: 1, max: 4096 })
+    .escape()
+];
 
-function getMessageType(message) {
-  if (!message.message) return 'unknown';
-  
-  if (message.message.conversation) return 'text';
-  if (message.message.imageMessage) return 'image';
-  if (message.message.videoMessage) return 'video';
-  if (message.message.audioMessage) return 'audio';
-  if (message.message.documentMessage) return 'document';
-  if (message.message.contactMessage) return 'contact';
-  if (message.message.locationMessage) return 'location';
-  
-  return 'other';
-}
+// ---------- Error Handling Middleware ----------
+const asyncHandler = (fn: Function) => (req: any, res: any, next: any) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
-async function sendWebhook(payload) {
-  if (!WEBHOOK_URL) return;
+const errorHandler = (err: any, req: any, res: any, next: any) => {
+  console.error('❌ Error:', err);
   
-  try {
-    await fetch(WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+  if (req.accepts('html')) {
+    res.status(500).render('error', { 
+      error: 'Internal Server Error',
+      message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
     });
-    console.log('📤 Webhook sent successfully');
-  } catch (error) {
-    console.warn('⚠️ Webhook failed:', error.message);
+  } else {
+    res.status(500).json({ 
+      error: 'Internal Server Error',
+      message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+    });
   }
-}
-
-// ---------- WhatsApp Socket Implementation ----------
-async function startWhatsAppSocket() {
-  try {
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    const { version } = await fetchLatestBaileysVersion();
-    
-    sock = makeWASocket({
-      version,
-      auth: state,
-      printQRInTerminal: true,
-      logger: {
-        level: 'warn',
-        log: (level, ...args) => console.log('[Baileys]', level, ...args)
-      }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      
-      if (qr) {
-        console.log('📱 Scan QR Code with WhatsApp to connect');
-        connectionStatus = 'qr_ready';
-        io.emit('connection_status', { status: 'qr_ready', qr });
-      }
-      
-      if (connection === 'close') {
-        const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== 401;
-        console.log('❌ Connection closed. Reconnecting:', shouldReconnect);
-        connectionStatus = 'disconnected';
-        io.emit('connection_status', { status: 'disconnected' });
-        
-        if (shouldReconnect) {
-          setTimeout(startWhatsAppSocket, 5000);
-        }
-      } else if (connection === 'open') {
-        console.log('✅ WhatsApp connected successfully');
-        connectionStatus = 'connected';
-        io.emit('connection_status', { status: 'connected' });
-      }
-    });
-
-    // Handle incoming messages
-    sock.ev.on('messages.upsert', async (messageUpdate) => {
-      try {
-        const db = await dbPromise;
-        const monitoredChannels = await db.all('SELECT jid FROM channels WHERE is_active = 1');
-        const monitoredJids = new Set(monitoredChannels.map(c => c.jid));
-
-        for (const message of messageUpdate.messages) {
-          if (!message.message || !message.key) continue;
-
-          const messageId = message.key.id || `generated-${Date.now()}-${Math.random()}`;
-          const remoteJid = message.key.remoteJid;
-          const participant = message.key.participant;
-          const isFromMe = message.key.fromMe;
-          const isGroup = remoteJid?.endsWith('@g.us');
-          
-          // Determine target channel and sender
-          const targetChannel = isGroup ? remoteJid : (participant || remoteJid);
-          const sender = isFromMe ? 'You' : (participant || remoteJid || 'unknown');
-          
-          // Only process if we're monitoring this channel
-          if (!monitoredJids.has(targetChannel)) continue;
-
-          const content = extractMessageContent(message);
-          const messageType = getMessageType(message);
-          const timestamp = Date.now();
-
-          // Determine message category
-          let type = 'message';
-          if (isFromMe) type = 'outgoing';
-          else if (isGroup) type = 'group';
-          else type = 'direct';
-
-          // Save to database
-          try {
-            await db.run(
-              `INSERT OR REPLACE INTO messages(id, sender, target_channel, type, content, timestamp, is_from_me, message_type) 
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-              [messageId, sender, targetChannel, type, content, timestamp, isFromMe ? 1 : 0, messageType]
-            );
-
-            // Update channel last message time
-            await db.run(
-              'UPDATE channels SET last_message_at = ? WHERE jid = ?',
-              [timestamp, targetChannel]
-            );
-
-            const messageData = {
-              id: messageId,
-              sender,
-              target_channel: targetChannel,
-              type,
-              content,
-              timestamp,
-              message_type: messageType,
-              formatted_time: new Date(timestamp).toLocaleString()
-            };
-
-            // Send real-time update to dashboard
-            io.emit('new_message', messageData);
-
-            // Send webhook notification
-            await sendWebhook({
-              event: 'new_message',
-              data: messageData
-            });
-
-            console.log(`📨 Message saved: ${targetChannel} - ${content.substring(0, 50)}...`);
-          } catch (dbError) {
-            console.error('Database error:', dbError);
-          }
-        }
-      } catch (error) {
-        console.error('Message processing error:', error);
-      }
-    });
-
-    // Handle group participant updates
-    sock.ev.on('group-participants.update', async (update) => {
-      console.log('👥 Group participants update:', update);
-      io.emit('group_update', update);
-      
-      await sendWebhook({
-        event: 'group_participants_update',
-        data: update
-      });
-    });
-
-  } catch (error) {
-    console.error('❌ Failed to start WhatsApp socket:', error);
-    setTimeout(startWhatsAppSocket, 10000);
-  }
-}
+};
 
 // ---------- Dashboard Routes ----------
-app.get('/', async (req, res) => {
+app.get('/', asyncHandler(async (req: any, res: any) => {
+  const startTime = Date.now();
+  
   try {
-    const channels = await dbManager.getChannels();
-    
-    const channelFilter = req.query.channel || '';
-    const searchQuery = req.query.search || '';
-    
-    const messages = await dbManager.getMessages({
-      channel: channelFilter as string,
-      search: searchQuery as string,
-      limit: 200
-    });
+    const [channels, messages, stats, alerts] = await Promise.all([
+      dbManager.getChannels(),
+      dbManager.getMessages({
+        channel: req.query.channel as string,
+        search: req.query.search as string,
+        limit: 200
+      }),
+      dbManager.getSystemStats(),
+      dbManager.getAlerts({ resolved: false, limit: 10 })
+    ]);
 
-    const stats = await dbManager.getSystemStats();
-    const alerts = await dbManager.getAlerts({ resolved: false, limit: 10 });
+    const enhancedStats = {
+      ...stats,
+      connection_status: whatsappManager?.getConnectionStatus() || 'disconnected',
+      uptime: performanceMonitor.getUptime(),
+      memory_usage: performanceMonitor.getMemoryUsage(),
+      processing_rate: performanceMonitor.getProcessingRate()
+    };
 
     res.render('dashboard', { 
       channels, 
       messages, 
       alerts,
-      channelFilter, 
-      searchQuery,
-      stats,
-      connectionStatus: whatsappManager.getConnectionStatus()
+      channelFilter: req.query.channel || '', 
+      searchQuery: req.query.search || '',
+      stats: enhancedStats,
+      connectionStatus: whatsappManager?.getConnectionStatus() || 'disconnected'
     });
+
+    performanceMonitor.recordMetric('dashboard_render_time', Date.now() - startTime);
   } catch (error) {
     console.error('Dashboard error:', error);
-    res.status(500).send('Internal server error');
+    res.status(500).render('error', { 
+      error: 'Dashboard Error',
+      message: 'Failed to load dashboard data'
+    });
   }
-});
+}));
 
 // Add new monitoring channel
-app.post('/channels', async (req, res) => {
-  const { jid, label } = req.body;
-  
-  if (!jid || !jid.trim()) {
-    return res.redirect('/?error=jid_required');
+app.post('/channels', validateChannelInput, asyncHandler(async (req: any, res: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.redirect('/?error=invalid_input');
   }
+
+  const { jid, label } = req.body;
   
   try {
     const channels = await dbManager.getChannels();
     const existingChannel = channels.find(c => c.jid === jid.trim());
     
-    if (!existingChannel) {
-      // Add to database (this would need a new method in DatabaseManager)
+    if (existingChannel) {
+      return res.redirect('/?error=channel_exists');
+    }
+
+    await dbManager.addChannel({
+      jid: jid.trim(),
+      label: label?.trim() || jid.trim(),
+      is_active: true,
+      created_at: Date.now()
+    });
+
+    if (whatsappManager) {
       await whatsappManager.addMonitoredChannel(jid.trim());
     }
     
@@ -316,18 +218,25 @@ app.post('/channels', async (req, res) => {
     console.error('Error adding channel:', error);
     res.redirect('/?error=database_error');
   }
-});
+}));
 
 // Delete monitoring channel
-app.post('/channels/delete', async (req, res) => {
+app.post('/channels/delete', asyncHandler(async (req: any, res: any) => {
   const { id } = req.body;
   
+  if (!id || isNaN(parseInt(id))) {
+    return res.redirect('/?error=invalid_id');
+  }
+
   try {
     const channels = await dbManager.getChannels();
     const channel = channels.find(c => c.id === parseInt(id));
     
     if (channel) {
-      await whatsappManager.removeMonitoredChannel(channel.jid);
+      await dbManager.removeChannel(channel.id);
+      if (whatsappManager) {
+        await whatsappManager.removeMonitoredChannel(channel.jid);
+      }
     }
     
     console.log(`🗑️ Removed monitoring channel: ${id}`);
@@ -336,100 +245,112 @@ app.post('/channels/delete', async (req, res) => {
     console.error('Error removing channel:', error);
     res.redirect('/?error=database_error');
   }
-});
+}));
 
 // ---------- API Routes ----------
-app.get('/api/messages', async (req, res) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
-    const offset = parseInt(req.query.offset || '0', 10);
-    const channel = req.query.channel;
-    
-    const messages = await dbManager.getMessages({
-      channel: channel as string,
-      limit,
-      offset
-    });
-    
-    res.json(messages);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+app.get('/api/messages', asyncHandler(async (req: any, res: any) => {
+  const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
+  const offset = parseInt(req.query.offset || '0', 10);
+  const channel = req.query.channel;
+  
+  const messages = await dbManager.getMessages({
+    channel: channel as string,
+    limit,
+    offset
+  });
+  
+  res.json(messages);
+}));
 
-app.get('/api/channels', async (req, res) => {
-  try {
-    const channels = await dbManager.getChannels();
-    res.json(channels);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+app.get('/api/channels', asyncHandler(async (req: any, res: any) => {
+  const channels = await dbManager.getChannels();
+  res.json(channels);
+}));
 
-app.get('/api/stats', async (req, res) => {
-  try {
-    const stats = await dbManager.getSystemStats();
-    stats.connection_status = whatsappManager.getConnectionStatus();
-    res.json(stats);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+app.get('/api/stats', asyncHandler(async (req: any, res: any) => {
+  const stats = await dbManager.getSystemStats();
+  const enhancedStats = {
+    ...stats,
+    connection_status: whatsappManager?.getConnectionStatus() || 'disconnected',
+    uptime: performanceMonitor.getUptime(),
+    memory_usage: performanceMonitor.getMemoryUsage(),
+    processing_rate: performanceMonitor.getProcessingRate()
+  };
+  res.json(enhancedStats);
+}));
 
-app.get('/api/alerts', async (req, res) => {
-  try {
-    const resolved = req.query.resolved === 'true';
-    const severity = req.query.severity as string;
-    const limit = parseInt(req.query.limit || '50', 10);
-    
-    const alerts = await dbManager.getAlerts({ resolved, severity, limit });
-    res.json(alerts);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+app.get('/api/alerts', asyncHandler(async (req: any, res: any) => {
+  const resolved = req.query.resolved === 'true';
+  const severity = req.query.severity as string;
+  const limit = parseInt(req.query.limit || '50', 10);
+  
+  const alerts = await dbManager.getAlerts({ resolved, severity, limit });
+  res.json(alerts);
+}));
 
-// Test webhook endpoint
-app.post('/api/webhook/test', async (req, res) => {
+app.post('/api/webhook/test', asyncHandler(async (req: any, res: any) => {
   const result = await webhookManager.testWebhook();
   res.json(result);
-});
+}));
 
-// Send message endpoint
-app.post('/api/send', async (req, res) => {
+app.post('/api/send', validateMessageInput, asyncHandler(async (req: any, res: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ error: 'Invalid input', details: errors.array() });
+  }
+
   const { jid, message } = req.body;
   
-  if (!jid || !message) {
-    return res.status(400).json({ error: 'JID and message are required' });
-  }
-  
   try {
-    const success = await whatsappManager.sendMessage(jid, message);
+    const success = await whatsappManager?.sendMessage(jid, message);
     res.json({ success, message: success ? 'Message sent' : 'Failed to send message' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to send message' });
   }
-});
+}));
+
+// Health check endpoint
+app.get('/health', asyncHandler(async (req: any, res: any) => {
+  const health = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: performanceMonitor.getUptime(),
+    memory: performanceMonitor.getMemoryUsage(),
+    connection: whatsappManager?.getConnectionStatus() || 'disconnected',
+    database: 'connected'
+  };
+  
+  res.json(health);
+}));
 
 // ---------- Socket.io Events ----------
 io.on('connection', (socket) => {
   console.log('🔌 Dashboard client connected');
   
   // Send current connection status
-  socket.emit('connection_status', { status: whatsappManager.getConnectionStatus() });
+  socket.emit('connection_status', { 
+    status: whatsappManager?.getConnectionStatus() || 'disconnected' 
+  });
   
   socket.on('disconnect', () => {
     console.log('🔌 Dashboard client disconnected');
   });
   
-  socket.on('request_stats', async () => {
+  socket.on('request_stats', asyncHandler(async () => {
     try {
       const stats = await dbManager.getSystemStats();
-      socket.emit('stats_update', stats);
+      const enhancedStats = {
+        ...stats,
+        connection_status: whatsappManager?.getConnectionStatus() || 'disconnected',
+        uptime: performanceMonitor.getUptime(),
+        memory_usage: performanceMonitor.getMemoryUsage(),
+        processing_rate: performanceMonitor.getProcessingRate()
+      };
+      socket.emit('stats_update', enhancedStats);
     } catch (error) {
       console.error('Stats error:', error);
     }
-  });
+  }));
 });
 
 // Set up connection status emitter
@@ -437,22 +358,52 @@ connectionStatusEmitter = (status: string) => {
   io.emit('connection_status', { status });
 };
 
+// Error handling middleware
+app.use(errorHandler);
+
 // ---------- Initialize and Start ----------
 async function initialize() {
   try {
+    console.log('🚀 Initializing WhatsApp Monitor System...');
+    
+    // Initialize services in correct order
     await dbManager.initialize();
+    console.log('✅ Database initialized');
+    
+    // Initialize WhatsApp manager with all dependencies
+    whatsappManager = new WhatsAppManager(
+      CONFIG.AUTH_DIR,
+      dbManager,
+      messageAnalyzer,
+      webhookManager,
+      performanceMonitor,
+      securityManager,
+      connectionStatusEmitter
+    );
+    
     await whatsappManager.initialize();
+    console.log('✅ WhatsApp manager initialized');
+    
+    // Start performance monitoring
+    performanceMonitor.startMonitoring();
+    console.log('✅ Performance monitoring started');
     
     // Set up periodic cleanup
     setInterval(async () => {
-      await dbManager.cleanup();
-      messageAnalyzer.cleanupRateLimitData();
-    }, 60 * 60 * 1000); // Every hour
+      try {
+        await dbManager.cleanup();
+        messageAnalyzer.cleanupRateLimitData();
+        performanceMonitor.cleanup();
+        console.log('🧹 Periodic cleanup completed');
+      } catch (error) {
+        console.error('❌ Cleanup error:', error);
+      }
+    }, CONFIG.CLEANUP_INTERVAL);
     
-    server.listen(PORT, () => {
-      console.log(`🚀 WhatsApp Monitor Dashboard: http://localhost:${PORT}`);
-      console.log(`📊 WebSocket server running on port ${PORT}`);
-      console.log(`🔗 Webhook URL: ${WEBHOOK_URL || '[NOT CONFIGURED]'}`);
+    server.listen(CONFIG.PORT, () => {
+      console.log(`🚀 WhatsApp Monitor Dashboard: http://localhost:${CONFIG.PORT}`);
+      console.log(`📊 WebSocket server running on port ${CONFIG.PORT}`);
+      console.log(`🔗 Webhook URL: ${CONFIG.WEBHOOK_URL || '[NOT CONFIGURED]'}`);
       console.log('\n⚠️  IMPORTANT: Only monitor accounts you own or have explicit permission to monitor.');
       console.log('   Unauthorized monitoring may violate WhatsApp ToS and local laws.\n');
     });
@@ -466,10 +417,31 @@ async function initialize() {
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down gracefully...');
   
-  await whatsappManager.cleanup();
-  await dbManager.close();
-  
-  process.exit(0);
+  try {
+    if (whatsappManager) {
+      await whatsappManager.cleanup();
+    }
+    await dbManager.close();
+    performanceMonitor.stop();
+    
+    server.close(() => {
+      console.log('✅ Server closed');
+      process.exit(0);
+    });
+  } catch (error) {
+    console.error('❌ Shutdown error:', error);
+    process.exit(1);
+  }
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
 });
 
 initialize();
