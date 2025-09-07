@@ -5,7 +5,7 @@
   "description": "Advanced WhatsApp monitoring system with real-time dashboard",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "npx tsc",
     "start": "npm run build && node dist/index.js",
     "dev": "npm run build && node dist/index.js",
     "test": "echo \"No tests specified\" && exit 0",
