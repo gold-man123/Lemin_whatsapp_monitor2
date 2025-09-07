@@ -1,8 +1,8 @@
 FROM node:18-alpine
 
 # Install required system dependencies
-RUN apk add --no-cache python3 make g++ sqlite git && \
-    npm install -g npm@latest
+RUN apk add --no-cache python3 make g++ sqlite git curl && \
+    npm install -g npm@latest typescript
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ RUN npm ci
 COPY . .
 
 # Build TypeScript
-RUN npm run build:server
+RUN npm run build
 
 # Create directories for data persistence
 RUN mkdir -p auth_info views public
