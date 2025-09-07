@@ -1,6 +1,6 @@
 import sqlite3 from 'sqlite3';
 import { open, Database } from 'sqlite';
-import { Message, Channel, Alert, SystemStats } from '../types/index.js';
+import { Message, Channel, Alert, SystemStats } from '../types/index';
 
 export class DatabaseManager {
   private db: Database | null = null;

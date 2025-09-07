@@ -2,7 +2,7 @@ export class PerformanceMonitor {
   private metrics: Map<string, number[]> = new Map();
   private startTime: number = Date.now();
   private isMonitoring: boolean = false;
-  private monitoringInterval: NodeJS.Timeout | null = null;
+  private monitoringInterval: NodeJS.Timer | null = null;
   private readonly METRIC_RETENTION_TIME = 60 * 60 * 1000; // 1 hour
   private readonly MONITORING_INTERVAL = 5000; // 5 seconds
 

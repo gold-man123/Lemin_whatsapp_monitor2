@@ -2,16 +2,16 @@ import makeWASocket, {
   fetchLatestBaileysVersion, 
   useMultiFileAuthState, 
   WASocket,
-  MessageUpsertType,
-  proto
+  proto,
+  DisconnectReason
 } from '@adiwajshing/baileys';
 import { Boom } from '@hapi/boom';
-import { Message } from '../types/index.js';
-import { DatabaseManager } from './DatabaseManager.js';
-import { MessageAnalyzer } from './MessageAnalyzer.js';
-import { WebhookManager } from './WebhookManager.js';
-import { PerformanceMonitor } from './PerformanceMonitor.js';
-import { SecurityManager } from './SecurityManager.js';
+import { Message } from '../types/index';
+import { DatabaseManager } from './DatabaseManager';
+import { MessageAnalyzer } from './MessageAnalyzer';
+import { WebhookManager } from './WebhookManager';
+import { PerformanceMonitor } from './PerformanceMonitor';
+import { SecurityManager } from './SecurityManager';
 
 export class WhatsAppManager {
   private sock: WASocket | null = null;
@@ -127,7 +127,7 @@ export class WhatsAppManager {
       }
 
       if (connection === 'close') {
-        const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== 401;
+        const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
         console.log('❌ Connection closed. Reconnecting:', shouldReconnect);
         this.connectionStatus = 'disconnected';
         this.connectionStatusEmitter('disconnected');

@@ -1,5 +1,5 @@
-import { Message, Alert } from '../types/index.js';
-import { PerformanceMonitor } from './PerformanceMonitor.js';
+import { Message, Alert } from '../types/index';
+import { PerformanceMonitor } from './PerformanceMonitor';
 
 export class MessageAnalyzer {
   private spamKeywords: Set<string>;
