@@ -1,8 +1,7 @@
 FROM node:18-alpine
 
 # Install required system dependencies
-RUN apk add --no-cache python3 make g++ sqlite git curl && \
-    npm install -g npm@latest typescript
+RUN apk add --no-cache python3 make g++ sqlite git curl
 
 WORKDIR /app
 
