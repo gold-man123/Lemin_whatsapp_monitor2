@@ -6,12 +6,12 @@ import makeWASocket, {
   DisconnectReason
 } from '@adiwajshing/baileys';
 import { Boom } from '@hapi/boom';
-import { Message } from '../types/index';
-import { DatabaseManager } from './DatabaseManager';
-import { MessageAnalyzer } from './MessageAnalyzer';
-import { WebhookManager } from './WebhookManager';
-import { PerformanceMonitor } from './PerformanceMonitor';
-import { SecurityManager } from './SecurityManager';
+import { Message } from '../types/index.js';
+import { DatabaseManager } from './DatabaseManager.js';
+import { MessageAnalyzer } from './MessageAnalyzer.js';
+import { WebhookManager } from './WebhookManager.js';
+import { PerformanceMonitor } from './PerformanceMonitor.js';
+import { SecurityManager } from './SecurityManager.js';
 
 export class WhatsAppManager {
   private sock: WASocket | null = null;
@@ -31,6 +31,7 @@ export class WhatsAppManager {
   private isProcessingQueue: boolean = false;
   private readonly BATCH_SIZE = 50;
   private readonly QUEUE_PROCESS_INTERVAL = 1000; // 1 second
+  private queueProcessor: NodeJS.Timer | null = null;
 
   constructor(
     authDir: string,
@@ -170,7 +171,7 @@ export class WhatsAppManager {
   }
 
   private startQueueProcessor(): void {
-    setInterval(async () => {
+    this.queueProcessor = setInterval(async () => {
       if (this.messageQueue.length > 0 && !this.isProcessingQueue) {
         await this.processMessageQueue();
       }
@@ -448,14 +449,6 @@ export class WhatsAppManager {
     }
   }
 
-  private startQueueProcessor(): void {
-    setInterval(async () => {
-      if (this.messageQueue.length > 0 && !this.isProcessingQueue) {
-        await this.processMessageQueue();
-      }
-    }, this.QUEUE_PROCESS_INTERVAL);
-  }
-
   getQueueStats(): { pending: number; processing: boolean } {
     return {
       pending: this.messageQueue.length,
@@ -466,6 +459,11 @@ export class WhatsAppManager {
   async cleanup(): Promise<void> {
     try {
       console.log('🧹 Cleaning up WhatsApp Manager...');
+      
+      if (this.queueProcessor) {
+        clearInterval(this.queueProcessor);
+        this.queueProcessor = null;
+      }
       
       if (this.sock) {
         try {

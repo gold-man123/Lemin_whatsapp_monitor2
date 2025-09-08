@@ -1,4 +1,4 @@
-import makeWASocket, { fetchLatestBaileysVersion, useMultiFileAuthState } from '@adiwajshing/baileys';
+import makeWASocket, { fetchLatestBaileysVersion, useMultiFileAuthState, DisconnectReason } from '@adiwajshing/baileys';
 import { Boom } from '@hapi/boom';
 import express from 'express';
 import http from 'http';
@@ -12,12 +12,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 // Import our services
-import { DatabaseManager } from './src/services/DatabaseManager';
-import { MessageAnalyzer } from './src/services/MessageAnalyzer';
-import { WebhookManager } from './src/services/WebhookManager';
-import { WhatsAppManager } from './src/services/WhatsAppManager';
-import { PerformanceMonitor } from './src/services/PerformanceMonitor';
-import { SecurityManager } from './src/services/SecurityManager';
+import { DatabaseManager } from './src/services/DatabaseManager.js';
+import { MessageAnalyzer } from './src/services/MessageAnalyzer.js';
+import { WebhookManager } from './src/services/WebhookManager.js';
+import { WhatsAppManager } from './src/services/WhatsAppManager.js';
+import { PerformanceMonitor } from './src/services/PerformanceMonitor.js';
+import { SecurityManager } from './src/services/SecurityManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,9 +84,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- Service Initialization ----------
 const dbManager = new DatabaseManager(CONFIG.DB_FILE);
-const messageAnalyzer = new MessageAnalyzer();
-const webhookManager = new WebhookManager(CONFIG.WEBHOOK_URL);
 const performanceMonitor = new PerformanceMonitor();
+const messageAnalyzer = new MessageAnalyzer(performanceMonitor);
+const webhookManager = new WebhookManager(CONFIG.WEBHOOK_URL);
 const securityManager = new SecurityManager();
 
 let whatsappManager: WhatsAppManager;

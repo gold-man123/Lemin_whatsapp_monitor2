@@ -1,5 +1,5 @@
-import fetch, { AbortController } from 'node-fetch';
-import { Message, Alert } from '../types/index';
+import fetch from 'node-fetch';
+import { Message, Alert } from '../types/index.js';
 
 export class WebhookManager {
   private readonly webhookUrl: string;
