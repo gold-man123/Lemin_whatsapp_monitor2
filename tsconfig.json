@@ -18,10 +18,8 @@
     "isolatedModules": true,
     "allowImportingTsExtensions": true,
     "noUnusedLocals": false,
-    "noUnusedParameters": false,
     "types": ["node"],
     "lib": ["ES2022"]
-  },
   "include": [
     "index.ts",
     "src/**/*"
@@ -30,6 +28,8 @@
     "node_modules",
     "dist",
     "views",
-    "public"
+    "public",
+    "src/main.tsx",
+    "src/App.tsx"
   ]
 }
