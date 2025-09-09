@@ -194,7 +194,7 @@ export class WebhookManager {
       const responseTime = Date.now() - startTime;
       return { 
         success: false, 
-        message: error.message,
+        message: (error as Error).message,
         response_time: responseTime
       };
     }

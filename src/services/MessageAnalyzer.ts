@@ -2,8 +2,8 @@ import { Message, Alert } from '../types/index.js';
 import { PerformanceMonitor } from './PerformanceMonitor.js';
 
 export class MessageAnalyzer {
-  private spamKeywords: Set<string>;
-  private suspiciousPatterns: RegExp[];
+  private spamKeywords!: Set<string>;
+  private suspiciousPatterns!: RegExp[];
   private rateLimitMap: Map<string, number[]>;
   private contentCache: Map<string, number>;
   private performanceMonitor: PerformanceMonitor;
@@ -358,7 +358,7 @@ export class MessageAnalyzer {
   }
 
   private createAlert(
-    type: string,
+    type: Alert['type'],
     severity: 'low' | 'medium' | 'high' | 'critical',
     message: Message,
     description: string,

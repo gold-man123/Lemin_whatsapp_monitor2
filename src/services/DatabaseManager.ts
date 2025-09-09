@@ -568,7 +568,7 @@ export class DatabaseManager {
     } catch (error) {
       return {
         status: 'unhealthy',
-        details: { error: error.message }
+        details: { error: (error as Error).message }
       };
     }
   }

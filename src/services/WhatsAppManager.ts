@@ -31,7 +31,7 @@ export class WhatsAppManager {
   private isProcessingQueue: boolean = false;
   private readonly BATCH_SIZE = 50;
   private readonly QUEUE_PROCESS_INTERVAL = 1000; // 1 second
-  private queueProcessor: NodeJS.Timer | null = null;
+  private queueProcessor: NodeJS.Timeout | null = null;
 
   constructor(
     authDir: string,
@@ -87,7 +87,12 @@ export class WhatsAppManager {
         printQRInTerminal: true,
         logger: {
           level: 'warn',
-          log: (level, ...args) => console.log('[Baileys]', level, ...args)
+          fatal: (...args: any[]) => console.error('[Baileys Fatal]', ...args),
+          error: (...args: any[]) => console.error('[Baileys Error]', ...args),
+          warn: (...args: any[]) => console.warn('[Baileys Warn]', ...args),
+          info: (...args: any[]) => console.info('[Baileys Info]', ...args),
+          debug: (...args: any[]) => console.debug('[Baileys Debug]', ...args),
+          trace: (...args: any[]) => console.trace('[Baileys Trace]', ...args)
         },
         markOnlineOnConnect: false,
         syncFullHistory: false,
