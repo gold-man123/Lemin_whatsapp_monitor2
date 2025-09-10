@@ -1,4 +1,8 @@
-import makeWASocket, { fetchLatestBaileysVersion, useMultiFileAuthState, DisconnectReason } from '@adiwajshing/baileys';
+import makeWASocket, { 
+  fetchLatestBaileysVersion, 
+  useMultiFileAuthState, 
+  DisconnectReason 
+} from '@adiwajshing/baileys';
 import { Boom } from '@hapi/boom';
 import express from 'express';
 import http from 'http';
@@ -11,9 +15,7 @@ import { body, validationResult } from 'express-validator';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import sqlite3 from 'sqlite3';
-import { createRequire } from 'module';
 
-const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
